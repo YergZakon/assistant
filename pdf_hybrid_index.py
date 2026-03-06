@@ -1089,7 +1089,14 @@ class Pipeline:
 
     def _write_parquet(self, path: Path, rows: List[Dict[str, Any]]) -> None:
         df = pd.DataFrame(rows)
-        df.to_parquet(path, index=False)
+        try:
+            df.to_parquet(path, index=False)
+        except ImportError as exc:
+            LOGGER.warning(
+                "Parquet engine is unavailable; skipping optional file write path=%s error=%s",
+                path,
+                exc,
+            )
 
     def _load_previous_doc_ids(self) -> Set[str]:
         if not self.manifest_jsonl.exists():
