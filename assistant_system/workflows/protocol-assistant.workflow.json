@@ -1,0 +1,52 @@
+{
+  "name": "medstandartkz-protocol-agentic-workflow",
+  "version": "1.0.0",
+  "steps": [
+    {
+      "id": "intake",
+      "agent": "intake",
+      "enabled": true
+    },
+    {
+      "id": "retrieval",
+      "agent": "retrieval",
+      "enabled": true,
+      "params": {
+        "candidate_pool_multiplier": 8,
+        "max_expansion_terms": 12,
+        "max_search_variants": 4,
+        "term_only_queries": 2,
+        "min_pool_size": 50
+      }
+    },
+    {
+      "id": "ranking",
+      "agent": "ranking",
+      "enabled": true
+    },
+    {
+      "id": "clarification",
+      "agent": "clarification",
+      "enabled": true,
+      "params": {
+        "target_confidence_pct": 90,
+        "max_candidates": 6,
+        "max_questions": 5,
+        "confidence_temperature": 0.08,
+        "yes_bonus": 0.16,
+        "no_penalty": 0.16,
+        "inverse_bonus": 0.05
+      }
+    },
+    {
+      "id": "safety",
+      "agent": "safety",
+      "enabled": true
+    },
+    {
+      "id": "response",
+      "agent": "response",
+      "enabled": true
+    }
+  ]
+}

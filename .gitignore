@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+logs/
+_bmad-output/
+clinical_protocols_2026-03-06_041600/
+*.zip
