@@ -1423,14 +1423,23 @@ class ResponseAgent(BaseAgent):
             line = cls._compact(re.sub(r"^[\-\–\—\*\d\.\)\(]+\s*", "", raw))
             if len(line) < 28:
                 continue
-            if len(line) > 260:
-                line = line[:257].rstrip() + "..."
             key = line.casefold()
             if key in seen:
                 continue
             seen.add(key)
             out.append(line)
         return out
+
+    @staticmethod
+    def _build_clarification_only_answer(questions: List[Dict[str, Any]]) -> str:
+        lines = ["Чтобы подготовить точные рекомендации, сначала уточните:"]
+        for idx, question in enumerate(questions[:6], start=1):
+            q = str(question.get("question", "")).strip()
+            if q:
+                lines.append(f"{idx}. {q}")
+        if len(lines) == 1:
+            lines.append("Опишите симптомы подробнее, включая длительность и сопутствующие признаки.")
+        return "\n".join(lines)
 
     @classmethod
     def _join_sections(
@@ -1492,8 +1501,6 @@ class ResponseAgent(BaseAgent):
     def _build_clinical_answer(
         self,
         top_match: Dict[str, Any],
-        clarification_required: bool,
-        clarification_questions: List[Dict[str, Any]],
     ) -> str:
         title = str(top_match.get("title", "")).strip()
         protocol_id = str(top_match.get("id", "")).strip()
@@ -1514,27 +1521,27 @@ class ResponseAgent(BaseAgent):
         treatment_points = self._pick_points(
             treatment_text,
             r"лечен|терап|рекоменд|режим|наблюден|контрол|симптом|ингаля|инфуз|питьев",
-            limit=4,
+            limit=6,
         )
         if not treatment_points:
-            treatment_points = self._split_points(treatment_text)[:4]
+            treatment_points = self._split_points(treatment_text)[:6]
 
         medication_points = self._pick_points(
             treatment_text,
             r"препарат|антибиот|антибак|антивирус|доза|\bмг\b|таблет|раствор|ингаля|амокси|цеф|азит|ибупроф|парацет|сальбут|будесон",
-            limit=4,
+            limit=6,
         )
 
         hospitalization_points = self._pick_points(
             hospitalization_text or treatment_text,
             r"госпитал|стационар|показан|экстр|неотлож|тяжел|сатурац|дыхательн|осложнен|критер",
-            limit=3,
+            limit=6,
         )
 
         if not (treatment_points or medication_points or hospitalization_points):
             fallback = self._compact(str(top_match.get("snippet") or top_match.get("summary") or ""))
             if fallback:
-                treatment_points = [fallback[:320] + ("..." if len(fallback) > 320 else "")]
+                treatment_points = [fallback]
 
         sections: List[str] = []
         if title:
@@ -1551,12 +1558,6 @@ class ResponseAgent(BaseAgent):
         hosp_block = self._render_list("Когда нужна госпитализация:", hospitalization_points)
         if hosp_block:
             sections.append(hosp_block)
-
-        if clarification_required and clarification_questions:
-            q_lines = ["Чтобы уточнить рекомендации, ответьте:"]
-            for idx, question in enumerate(clarification_questions[:4], start=1):
-                q_lines.append(f"{idx}. {question.get('question', '')}")
-            sections.append("\n".join(q_lines))
 
         if not sections:
             return (
@@ -1577,17 +1578,18 @@ class ResponseAgent(BaseAgent):
         )
         clarification_required = bool(context.clarification.get("required"))
         clarification_questions = context.clarification.get("questions") or []
+        answered_count = int(context.clarification.get("answered_count") or 0)
 
         if not top_match:
             answer = (
                 "По вашему описанию не удалось подобрать рекомендации по протоколу. "
                 "Опишите жалобы подробнее: симптомы, длительность, температуру, возраст."
             )
+        elif clarification_required and clarification_questions:
+            answer = self._build_clarification_only_answer(clarification_questions)
         else:
             answer = self._build_clinical_answer(
                 top_match=top_match,
-                clarification_required=clarification_required,
-                clarification_questions=clarification_questions,
             )
 
         if context.safety.get("warning"):
@@ -1599,6 +1601,7 @@ class ResponseAgent(BaseAgent):
             "alternatives": len(alternatives),
             "top_confidence_pct": round(top_confidence, 1),
             "clarification_required": clarification_required,
+            "clarification_answered_count": answered_count,
             "answer_preview": answer[:220],
         }
 

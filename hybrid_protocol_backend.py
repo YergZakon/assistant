@@ -288,14 +288,13 @@ class HybridProtocolAssistant:
         full_parts: List[str] = []
         for row in rows:
             section = str(row["section"] or "other").strip() or "other"
-            part = self._clip_text(str(row["text"] or ""), 2600)
+            part = str(row["text"] or "").strip()
             if not part:
                 continue
             full_parts.append(part)
             prev = content.get(section)
             if prev:
-                merged = f"{prev}\n\n{part}"
-                content[section] = self._clip_text(merged, 8000)
+                content[section] = f"{prev}\n\n{part}"
             else:
                 content[section] = part
 
@@ -311,7 +310,7 @@ class HybridProtocolAssistant:
             "version": meta.get("year") or "",
         }
         if include_full_text:
-            response["full_text"] = self._clip_text("\n\n".join(full_parts), 30000)
+            response["full_text"] = "\n\n".join(full_parts)
         return response
 
     def protocol_count(self) -> int:
@@ -321,4 +320,3 @@ class HybridProtocolAssistant:
             else:
                 self._load_doc_registry()
         return len(self._doc_registry)
-
