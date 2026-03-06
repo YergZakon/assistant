@@ -1091,11 +1091,11 @@ class Pipeline:
         df = pd.DataFrame(rows)
         try:
             df.to_parquet(path, index=False)
-        except ImportError as exc:
+        except ImportError:
             LOGGER.warning(
-                "Parquet engine is unavailable; skipping optional file write path=%s error=%s",
+                "Parquet engine is unavailable; skipping optional file write path=%s "
+                "(install pyarrow or fastparquet to enable parquet export)",
                 path,
-                exc,
             )
 
     def _load_previous_doc_ids(self) -> Set[str]:
