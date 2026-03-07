@@ -1128,6 +1128,18 @@ class ClarificationAgent(BaseAgent):
         return collect_symptoms(text)
 
     @staticmethod
+    def _is_symptom_domain_compatible(symptom_id: str, query_domains: List[str]) -> bool:
+        query_domain_set = {str(domain).strip() for domain in query_domains if str(domain).strip()}
+        if not query_domain_set:
+            return True
+        symptom_domains = {
+            str(domain).strip() for domain in SYMPTOM_TO_DOMAINS.get(symptom_id, []) if str(domain).strip()
+        }
+        if not symptom_domains:
+            return True
+        return bool(query_domain_set & symptom_domains)
+
+    @staticmethod
     def _domain_question_priority(query_domains: List[str]) -> List[str]:
         ordered: List[str] = []
         seen: set[str] = set()
@@ -1168,6 +1180,8 @@ class ClarificationAgent(BaseAgent):
             symptoms = set(self._collect_symptoms(self._candidate_text(item)))
             for symptom in symptoms:
                 if symptom in query_symptoms:
+                    continue
+                if not self._is_symptom_domain_compatible(symptom, query_domains):
                     continue
                 presence.setdefault(symptom, set()).add(cid)
 
