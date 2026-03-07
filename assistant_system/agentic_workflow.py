@@ -1417,6 +1417,24 @@ class SafetyAgent(BaseAgent):
 
 class ResponseAgent(BaseAgent):
     name = "response"
+    NON_PATIENT_PATTERNS: List[re.Pattern[str]] = [
+        re.compile(
+            r"(одобрен|утвержден|комисси|протокол\s*№|дата\s*утвержден|введен\s*в\s*действие)",
+            re.I,
+        ),
+        re.compile(
+            r"(разработчик|рабоч[а-я ]*групп|составител|рецензент|конфликт\s+интерес|аффилиац|автор)",
+            re.I,
+        ),
+        re.compile(
+            r"(доктор\s+медицинск|кандидат\s+медицинск|д\.м\.н|к\.м\.н|профессор|академик)",
+            re.I,
+        ),
+        re.compile(
+            r"(библиограф|список\s+литератур|references|приложени[ея]|паспорт\s+протокол)",
+            re.I,
+        ),
+    ]
 
     def __init__(self, search_backend: SearchBackend) -> None:
         self.search_backend = search_backend
@@ -1435,7 +1453,13 @@ class ResponseAgent(BaseAgent):
         seen: set[str] = set()
         for raw in parts:
             line = cls._compact(re.sub(r"^[\-\–\—\*\d\.\)\(]+\s*", "", raw))
+            line = cls._compact(re.sub(r"\[[0-9,\-\s]+\]", " ", line))
+            line = cls._compact(re.sub(r"\(УД\s*[\-–—]?\s*[A-ZА-Я]\)", " ", line, flags=re.I))
+            if not cls._is_patient_relevant_line(line):
+                continue
             if len(line) < 28:
+                continue
+            if len(line) > 700:
                 continue
             key = line.casefold()
             if key in seen:
@@ -1443,6 +1467,22 @@ class ResponseAgent(BaseAgent):
             seen.add(key)
             out.append(line)
         return out
+
+    @classmethod
+    def _is_patient_relevant_line(cls, text: str) -> bool:
+        line = cls._compact(text)
+        if not line:
+            return False
+        if re.fullmatch(r"[\d\W_]+", line):
+            return False
+        for pattern in cls.NON_PATIENT_PATTERNS:
+            if pattern.search(line):
+                return False
+        if re.search(r"^\d{1,2}\.\s*[А-ЯA-Z\s]{8,}$", line):
+            return False
+        if re.search(r"(таблиц|рисунок)\s*\d+", line, re.I):
+            return False
+        return True
 
     @staticmethod
     def _build_clarification_only_answer(questions: List[Dict[str, Any]]) -> str:
@@ -1500,6 +1540,22 @@ class ResponseAgent(BaseAgent):
             lines.append(f"- {item}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _unique_points(points: List[str], seen: set[str], limit: int) -> List[str]:
+        out: List[str] = []
+        for raw in points:
+            point = " ".join(str(raw or "").split()).strip()
+            if not point:
+                continue
+            key = point.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(point)
+            if len(out) >= max(1, limit):
+                break
+        return out
+
     def _fetch_protocol_payload(self, protocol_id: str) -> Dict[str, Any]:
         getter = getattr(self.search_backend, "get_protocol", None)
         if not callable(getter):
@@ -1527,14 +1583,32 @@ class ResponseAgent(BaseAgent):
             content,
             ["treatment", "лечен", "терап", "organization", "реабилит"],
         )
+        diagnostics_text = self._join_sections(
+            content,
+            ["diagnostics", "диагност", "обслед", "скрининг", "classification", "классификац"],
+        )
+        monitoring_text = self._join_sections(
+            content,
+            ["monitoring", "наблюден", "монитор", "контрол", "prevention", "профилактик", "rehabilit"],
+        )
         hospitalization_text = self._join_sections(
             content,
             ["hospitalization", "госпитал", "стационар"],
         )
 
+        immediate_points = self._pick_points(
+            treatment_text,
+            r"режим|покой|постель|обильн|питьев|диет|гигиен|проветр|увлажн|симптом|ингаля",
+            limit=4,
+        )
+        diagnostics_points = self._pick_points(
+            diagnostics_text,
+            r"анализ|исследован|пцр|посев|рентген|кт|мрт|узи|эхо|электрокард|скрининг|осмотр|лаборатор",
+            limit=5,
+        )
         treatment_points = self._pick_points(
             treatment_text,
-            r"лечен|терап|рекоменд|режим|наблюден|контрол|симптом|ингаля|инфуз|питьев",
+            r"лечен|терап|тактик|рекоменд|наблюден|контрол|симптом|ингаля|инфуз|питьев|диет",
             limit=6,
         )
         if not treatment_points:
@@ -1551,17 +1625,48 @@ class ResponseAgent(BaseAgent):
             r"госпитал|стационар|показан|экстр|неотлож|тяжел|сатурац|дыхательн|осложнен|критер",
             limit=6,
         )
+        monitoring_points = self._pick_points(
+            monitoring_text or treatment_text,
+            r"наблюден|контрол|монитор|повторн|профилакти|реабилит|вакцин|осмотр",
+            limit=4,
+        )
 
-        if not (treatment_points or medication_points or hospitalization_points):
+        if not immediate_points:
+            immediate_points = treatment_points[:3]
+
+        if not (
+            immediate_points
+            or diagnostics_points
+            or treatment_points
+            or medication_points
+            or hospitalization_points
+            or monitoring_points
+        ):
             fallback = self._compact(str(top_match.get("snippet") or top_match.get("summary") or ""))
             if fallback:
                 treatment_points = [fallback]
 
+        used_points: set[str] = set()
+        immediate_points = self._unique_points(immediate_points, used_points, limit=4)
+        diagnostics_points = self._unique_points(diagnostics_points, used_points, limit=5)
+        treatment_points = self._unique_points(treatment_points, used_points, limit=6)
+        medication_points = self._unique_points(medication_points, used_points, limit=6)
+        hospitalization_points = self._unique_points(hospitalization_points, used_points, limit=6)
+        monitoring_points = self._unique_points(monitoring_points, used_points, limit=4)
+
         sections: List[str] = []
         if title:
-            sections.append(f"По вашему описанию наиболее подходит: {title}.")
+            sections.append(f"Предположительно подходит: {title}.")
 
-        treat_block = self._render_list("Как лечить:", treatment_points)
+        now_block = self._render_list("Что делать сейчас:", immediate_points)
+        if now_block:
+            sections.append(now_block)
+
+        diagnostics_block = self._render_list("Какие обследования обычно нужны:", diagnostics_points)
+        if diagnostics_block:
+            sections.append(diagnostics_block)
+
+        treat_block = self._render_list("Как лечат:", treatment_points)
         if treat_block:
             sections.append(treat_block)
 
@@ -1569,9 +1674,13 @@ class ResponseAgent(BaseAgent):
         if meds_block:
             sections.append(meds_block)
 
-        hosp_block = self._render_list("Когда нужна госпитализация:", hospitalization_points)
+        hosp_block = self._render_list("Когда нужна госпитализация или срочная помощь:", hospitalization_points)
         if hosp_block:
             sections.append(hosp_block)
+
+        control_block = self._render_list("Контроль и профилактика:", monitoring_points)
+        if control_block:
+            sections.append(control_block)
 
         if not sections:
             return (
